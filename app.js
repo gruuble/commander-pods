@@ -8,6 +8,8 @@
        players:  [{ id, name, createdAt }],
        settings: { durationMinutes, soundEnabled },
        history:  [{ at, podSizes, pods, durationMinutes }]   // max 20
+       roundNumber: 1,    // next round to record; reset by "Reset day"
+       results:  [{ round, at, pods: [{ players, winner }], satOut, durationMinutes }]
      }
    The current pods and any "sitting out" player are session-only and are
    intentionally NOT part of the stored document (per the v1 data contract).
@@ -30,7 +32,7 @@
   const WARN_MS = 5 * 60 * 1000; // amber zone
   const DANGER_MS = 60 * 1000;   // red pulsing zone
   const DEFAULTS = Object.freeze({ durationMinutes: 75, soundEnabled: true });
-  const TAB_NAMES = ['roster', 'pods', 'timer'];
+  const TAB_NAMES = ['roster', 'pods', 'timer', 'results'];
 
   // --------------------------------------------------------------------------
   // State
@@ -41,6 +43,9 @@
     history: [],    // [{ at, podSizes, pods, durationMinutes }]
     pods: [],       // current split as arrays of player ids (session-only)
     sittingOut: [], // player ids sitting out (session-only, from the 5-player choice)
+    winnerPicks: {},// pod index -> picked winner player id (session-only, follows the pods)
+    roundNumber: 1, // next round to record; Reset day puts it back to 1
+    results: [],    // recorded rounds: [{ round, at, pods: [{players, winner}], satOut, durationMinutes }]
   };
 
   let storageOk = true;
@@ -112,6 +117,13 @@
   function timeOfDay(timestamp) {
     const d = new Date(timestamp);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  /** "2026-10-09 21:35" (local time) — used in results and the CSV export. */
+  function formatDateTime(timestamp) {
+    const d = new Date(timestamp);
+    const pad = (x) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
   // --------------------------------------------------------------------------
@@ -208,6 +220,8 @@
           soundEnabled: state.settings.soundEnabled,
         },
         history: state.history,
+        roundNumber: state.roundNumber,
+        results: state.results,
       };
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(doc));
     } catch {
@@ -249,6 +263,24 @@
           podSizes: h.podSizes.map(Number),
           pods: h.pods.map((pod) => (Array.isArray(pod) ? pod.map(String) : [])),
           durationMinutes: Number(h.durationMinutes) || DEFAULTS.durationMinutes,
+        }));
+    }
+    state.roundNumber =
+      Number.isInteger(doc.roundNumber) && doc.roundNumber >= 1 ? doc.roundNumber : 1;
+    if (Array.isArray(doc.results)) {
+      state.results = doc.results
+        .filter((r) => r && Number.isInteger(r.round) && Array.isArray(r.pods))
+        .map((r) => ({
+          round: r.round,
+          at: Number(r.at) || Date.now(),
+          pods: r.pods
+            .filter((p) => p && Array.isArray(p.players))
+            .map((p) => ({
+              players: p.players.map(String),
+              winner: typeof p.winner === 'string' ? p.winner : '',
+            })),
+          satOut: Array.isArray(r.satOut) ? r.satOut.map(String) : [],
+          durationMinutes: Number(r.durationMinutes) || DEFAULTS.durationMinutes,
         }));
     }
   }
@@ -508,6 +540,7 @@
     }
     state.pods = pods;
     state.sittingOut = [];
+    state.winnerPicks = {}; // fresh split, fresh picks
     pushHistory(sizes);
   }
 
@@ -611,14 +644,14 @@
     }
     state.pods.forEach((pod, index) => {
       const card = el('article', 'pod-card');
+      card.dataset.podIndex = String(index);
       const head = el('div', 'pod-card__head');
       head.append(el('h3', 'pod-card__title', `Pod ${index + 1}`));
       const badge = el('span', 'pod-badge', String(pod.length));
       badge.setAttribute('aria-label', `${pod.length} players`);
       head.append(badge);
-      const names = el('ul', 'pod-card__players');
-      for (const id of pod) names.append(el('li', null, nameOf(id)));
-      card.append(head, names);
+      card.append(head);
+      card.append(buildWinnerPicker(index, pod));
       grid.append(card);
     });
     if (state.sittingOut.length > 0) {
@@ -626,11 +659,59 @@
       const head = el('div', 'pod-card__head');
       head.append(el('h3', 'pod-card__title', 'Sitting out'));
       head.append(el('span', 'pod-badge', String(state.sittingOut.length)));
-      const names = el('ul', 'pod-card__players');
-      for (const id of state.sittingOut) names.append(el('li', null, nameOf(id)));
+      const names = el('ul', 'pod-names');
+      for (const id of state.sittingOut) {
+        if (state.players.some((p) => p.id === id)) names.append(el('li', null, nameOf(id)));
+      }
       card.append(head, names);
       grid.append(card);
     }
+  }
+
+  /** One radio per player still on the roster — tapping marks that pod's winner. */
+  function buildWinnerPicker(podIndex, pod) {
+    const fieldset = el('fieldset', 'pod-picker');
+    const legend = el('legend', 'visually-hidden', `Pod ${podIndex + 1} — tap the winner`);
+    const list = el('ul', 'pod-card__players');
+    const pickedId = state.winnerPicks[podIndex];
+    for (const id of pod) {
+      const player = state.players.find((p) => p.id === id);
+      if (!player) continue; // left after the split — cannot win
+      const li = el('li');
+      const label = el('label', 'pod-player' + (pickedId === id ? ' pod-player--winner' : ''));
+      const input = el('input');
+      input.type = 'radio';
+      input.name = `pod-${podIndex}-winner`;
+      input.value = id;
+      input.checked = pickedId === id;
+      input.addEventListener('change', () => onWinnerPick(podIndex, id));
+      label.append(input, el('span', null, player.name));
+      li.append(label);
+      list.append(li);
+    }
+    fieldset.append(legend, list);
+    return fieldset;
+  }
+
+  function onWinnerPick(podIndex, playerId) {
+    state.winnerPicks[podIndex] = playerId;
+    const card = document.querySelector(`.pod-card[data-pod-index="${podIndex}"]`);
+    if (card) {
+      card.querySelectorAll('.pod-player').forEach((label) => {
+        const input = label.querySelector('input[type="radio"]');
+        label.classList.toggle('pod-player--winner', !!input && input.value === playerId);
+      });
+    }
+    renderSubmitControls();
+  }
+
+  /** A pick only counts while the chosen player is still on the roster and in the pod. */
+  function pickIsValid(podIndex) {
+    const id = state.winnerPicks[podIndex];
+    if (!id) return false;
+    const pod = state.pods[podIndex];
+    if (!pod || !pod.includes(id)) return false;
+    return state.players.some((p) => p.id === id);
   }
 
   function renderPodsView() {
@@ -638,6 +719,145 @@
     renderStaleBanner();
     renderFivePanel();
     renderPods();
+    renderSubmitControls();
+  }
+
+  function renderSubmitControls() {
+    const btn = $('submitRoundBtn');
+    const helper = $('submitHelper');
+    btn.textContent = `Submit round ${state.roundNumber}`;
+    const n = state.pods.length;
+    if (n === 0) {
+      btn.disabled = true;
+      helper.textContent = 'Generate groups first, then tap a winner in each pod.';
+      helper.hidden = false;
+      return;
+    }
+    const done = state.pods.reduce((acc, _pod, i) => acc + (pickIsValid(i) ? 1 : 0), 0);
+    if (done === n) {
+      btn.disabled = false;
+      helper.hidden = true;
+    } else {
+      btn.disabled = true;
+      helper.textContent = `Tap a winner in every pod — ${done} of ${n} selected.`;
+      helper.hidden = false;
+    }
+  }
+
+  function submitRound() {
+    if (state.pods.length === 0) return;
+    for (let i = 0; i < state.pods.length; i++) {
+      if (!pickIsValid(i)) {
+        toast('Tap a winner in every pod before submitting.');
+        return;
+      }
+    }
+    const recorded = state.roundNumber;
+    state.results.push({
+      round: recorded,
+      at: Date.now(),
+      pods: state.pods.map((pod, i) => ({
+        players: pod.filter((id) => state.players.some((p) => p.id === id)).map(nameOf),
+        winner: nameOf(state.winnerPicks[i]),
+      })),
+      satOut: state.sittingOut.map(nameOf),
+      durationMinutes: state.settings.durationMinutes,
+    });
+    state.roundNumber += 1;
+    state.winnerPicks = {};
+    renderPods(); // radios back to unchecked
+    renderSubmitControls();
+    renderResults();
+    scheduleSave();
+    toast(`Round ${recorded} recorded.`);
+  }
+
+  // --------------------------------------------------------------------------
+  // Results (a day's recorded rounds + CSV export)
+  // --------------------------------------------------------------------------
+  function renderResults() {
+    const list = $('resultsList');
+    list.textContent = '';
+    const count = state.results.length;
+    $('resultsSummary').textContent = count === 1 ? '1 round' : `${count} rounds`;
+    $('downloadCsvBtn').disabled = count === 0;
+    if (count === 0) {
+      list.append(
+        el('p', 'empty-note', 'No rounds recorded yet. Generate pods, tap a winner in each pod, then press "Submit round".')
+      );
+      return;
+    }
+    for (const result of state.results) {
+      const card = el('article', 'result-card');
+      const head = el('div', 'result-card__head');
+      head.append(el('h3', 'result-card__title', `Round ${result.round}`));
+      head.append(el('span', 'result-card__time', formatDateTime(result.at)));
+      card.append(head);
+      const podsList = el('ul', 'result-card__pods');
+      result.pods.forEach((pod, i) => {
+        const li = el('li', 'result-round__pod');
+        li.append(el('span', 'result-round__label', `Pod ${i + 1}`));
+        li.append(el('span', 'result-round__players', pod.players.join(', ')));
+        if (pod.winner) li.append(el('span', 'result-round__winner', `🏆 ${pod.winner}`));
+        podsList.append(li);
+      });
+      if (result.satOut.length > 0) {
+        const li = el('li', 'result-round__pod result-round__pod--sitout');
+        li.append(el('span', 'result-round__label', 'Sitting out'));
+        li.append(el('span', 'result-round__players', result.satOut.join(', ')));
+        podsList.append(li);
+      }
+      card.append(podsList);
+      list.append(card);
+    }
+  }
+
+  function csvEscape(value) {
+    const s = String(value);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  /** Pure CSV builder (exported for the Node test harness). CRLF for spreadsheets. */
+  function buildResultsCsv(results) {
+    const lines = ['Round,Recorded At,Pod,Players,Winner'];
+    for (const result of results) {
+      const when = csvEscape(formatDateTime(result.at));
+      result.pods.forEach((pod, i) => {
+        lines.push(
+          [result.round, when, i + 1, csvEscape(pod.players.join(', ')), csvEscape(pod.winner)].join(',')
+        );
+      });
+      if (result.satOut.length > 0) {
+        lines.push(
+          [result.round, when, csvEscape('Sitting out'), csvEscape(result.satOut.join(', ')), ''].join(',')
+        );
+      }
+    }
+    return lines.join('\r\n');
+  }
+
+  function resultsCsv() {
+    return buildResultsCsv(state.results);
+  }
+
+  function downloadResultsCsv() {
+    if (state.results.length === 0) return;
+    try {
+      const blob = new Blob([resultsCsv()], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const d = new Date();
+      const pad = (x) => String(x).padStart(2, '0');
+      link.href = url;
+      link.download = `commander-pods-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('CSV downloaded.');
+    } catch {
+      toast('Download failed — your browser blocked it.');
+    }
   }
 
   function podsPlainText() {
@@ -958,6 +1178,9 @@
     state.pods = [];
     state.sittingOut = [];
     state.history = [];
+    state.winnerPicks = {};
+    state.roundNumber = 1;
+    state.results = [];
     state.settings = { durationMinutes: DEFAULTS.durationMinutes, soundEnabled: DEFAULTS.soundEnabled };
     fiveChoicePending = false;
     editingId = null;
@@ -1015,6 +1238,8 @@
     $('fiveHouseBtn').addEventListener('click', () => applyFiveChoice(true));
     $('fiveSitOutBtn').addEventListener('click', () => applyFiveChoice(false));
     $('copyPodsBtn').addEventListener('click', copyPods);
+    $('submitRoundBtn').addEventListener('click', submitRound);
+    $('downloadCsvBtn').addEventListener('click', downloadResultsCsv);
 
     // Timer
     $('startBtn').addEventListener('click', startTimer);
@@ -1081,6 +1306,7 @@
   function renderAll() {
     renderRoster();
     renderPodsView();
+    renderResults();
     renderPresets();
     renderTimer();
     renderSound();
@@ -1110,5 +1336,5 @@
   init();
 
   // Exposed for the hidden self-test mode and manual QA. Harmless in production.
-  globalThis.CommanderPods = { computePodSizes, runSelfTest };
+  globalThis.CommanderPods = { computePodSizes, runSelfTest, buildResultsCsv };
 })();
