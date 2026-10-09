@@ -5,7 +5,7 @@
    Storage (localStorage key "commander-pods:v1"):
      {
        version: 1,
-       players:  [{ id, name, createdAt }],
+       players:  [{ id, name, createdAt, out? }],
        settings: { durationMinutes, soundEnabled },
        history:  [{ at, podSizes, pods, durationMinutes }]   // max 20
        roundNumber: 1,    // next round to record; reset by "Reset day"
@@ -214,7 +214,7 @@
     try {
       const doc = {
         version: SCHEMA_VERSION,
-        players: state.players.map((p) => ({ id: p.id, name: p.name, createdAt: p.createdAt })),
+        players: state.players.map((p) => ({ id: p.id, name: p.name, createdAt: p.createdAt, out: p.out === true })),
         settings: {
           durationMinutes: state.settings.durationMinutes,
           soundEnabled: state.settings.soundEnabled,
@@ -246,6 +246,7 @@
           id: typeof p.id === 'string' && p.id ? p.id : makeId(),
           name: p.name.trim().slice(0, MAX_NAME_LEN) || 'Player',
           createdAt: Number.isFinite(p.createdAt) ? p.createdAt : Date.now(),
+          out: p.out === true,
         }));
     }
     const s = doc.settings || {};
@@ -355,6 +356,25 @@
   // --------------------------------------------------------------------------
   // Roster
   // --------------------------------------------------------------------------
+  /** Players actually in the rotation (not marked as sitting out). */
+  function activePlayers() {
+    return state.players.filter((p) => !p.out);
+  }
+
+  function activePlayerCount() {
+    return activePlayers().length;
+  }
+
+  /** Everyone not playing this split: the 5-player sit-out choice + roster sit-outs. */
+  function currentSitterIds() {
+    return [
+      ...new Set([
+        ...state.sittingOut,
+        ...state.players.filter((p) => p.out).map((p) => p.id),
+      ]),
+    ].filter((id) => state.players.some((p) => p.id === id));
+  }
+
   function validateName(rawName, excludeId) {
     const name = String(rawName == null ? '' : rawName).trim();
     if (!name) return { ok: false, error: 'Enter a player name.' };
@@ -387,7 +407,7 @@
       showAddError(result.error);
       return false;
     }
-    state.players.push({ id: makeId(), name: result.name, createdAt: Date.now() });
+    state.players.push({ id: makeId(), name: result.name, createdAt: Date.now(), out: false });
     hideAddError();
     renderRoster();
     renderPodsView();
@@ -404,6 +424,16 @@
     showUndoToast(removed, index);
     renderRoster();
     renderPodsView();
+    scheduleSave();
+  }
+
+  /** Toggles a player between the rotation and sitting out (persists until undone). */
+  function toggleSitOut(id) {
+    const player = state.players.find((p) => p.id === id);
+    if (!player) return;
+    player.out = !player.out;
+    renderRoster();
+    renderPodsView(); // counts, helpers, stale banner, winner picker
     scheduleSave();
   }
 
@@ -454,10 +484,20 @@
 
   function renderRosterHint() {
     const hint = $('rosterHint');
-    const n = state.players.length;
-    if (n === 0) hint.textContent = 'Add everyone who is here, then split into pods on the Pods tab.';
-    else if (n < 3) hint.textContent = 'Add at least 3 players to form pods.';
-    else hint.textContent = 'Ready — open the Pods tab and press Generate groups.';
+    const total = state.players.length;
+    const active = activePlayerCount();
+    const out = total - active;
+    if (total === 0) {
+      hint.textContent = 'Add everyone who is here, then split into pods on the Pods tab.';
+    } else if (active < 3) {
+      hint.textContent =
+        out > 0
+          ? `Only ${active} active — bring players back in or add more (need at least 3).`
+          : 'Add at least 3 players to form pods.';
+    } else {
+      hint.textContent =
+        `Ready — ${active} active${out > 0 ? `, ${out} sitting out` : ''}. Open the Pods tab and press Generate groups.`;
+    }
     hint.hidden = false;
   }
 
@@ -494,21 +534,40 @@
         wrap.append(input, err);
         row.append(wrap);
       } else {
+        const isOut = player.out === true;
+        if (isOut) row.classList.add('player-row--out');
         const nameBtn = el('button', 'player-name', player.name);
         nameBtn.type = 'button';
         nameBtn.title = 'Tap to rename';
         nameBtn.setAttribute('aria-label', `Rename ${player.name}`);
         nameBtn.addEventListener('click', () => startRename(player.id));
+        row.append(nameBtn);
+        if (isOut) row.append(el('span', 'player-out-badge', 'Sitting out'));
+        const sitBtn = el(
+          'button',
+          'player-sitout' + (isOut ? ' player-sitout--on' : ''),
+          isOut ? 'Bring in' : 'Sit out'
+        );
+        sitBtn.type = 'button';
+        sitBtn.setAttribute('aria-pressed', String(isOut));
+        sitBtn.setAttribute(
+          'aria-label',
+          isOut ? `Bring ${player.name} back into the rotation` : `Mark ${player.name} as sitting out`
+        );
+        sitBtn.addEventListener('click', () => toggleSitOut(player.id));
         const removeBtn = el('button', 'player-remove', '×');
         removeBtn.type = 'button';
         removeBtn.setAttribute('aria-label', `Remove ${player.name}`);
         removeBtn.addEventListener('click', () => removePlayer(player.id));
-        row.append(nameBtn, removeBtn);
+        row.append(sitBtn, removeBtn);
       }
       list.append(row);
     }
+    const total = state.players.length;
+    const active = activePlayerCount();
     $('playerCount').textContent =
-      `${state.players.length} player${state.players.length === 1 ? '' : 's'}`;
+      `${active} player${active === 1 ? '' : 's'}` +
+      (total - active > 0 ? ` · ${total - active} sitting out` : '');
     renderRosterHint();
   }
 
@@ -545,7 +604,7 @@
   }
 
   function generatePods() {
-    const n = state.players.length;
+    const n = activePlayerCount();
     if (n < 3) return; // button is disabled; defensive no-op
     if (n === 5) {
       fiveChoicePending = true; // never silently produce an invalid pod
@@ -555,18 +614,18 @@
     fiveChoicePending = false;
     const sizes = computePodSizes(n);
     if (!sizes || sizes.length === 0) return;
-    dealIntoPods(state.players.map((p) => p.id), sizes);
+    dealIntoPods(activePlayers().map((p) => p.id), sizes);
     renderPodsView();
     scheduleSave(); // history is persisted
   }
 
   function applyFiveChoice(houseRules) {
-    if (state.players.length !== 5) {
+    if (activePlayerCount() !== 5) {
       fiveChoicePending = false;
       renderPodsView();
       return;
     }
-    const ids = state.players.map((p) => p.id);
+    const ids = activePlayers().map((p) => p.id);
     fiveChoicePending = false;
     if (houseRules) {
       state.pods = [ids.slice()];
@@ -592,7 +651,7 @@
   function podsAreStale() {
     if (state.pods.length === 0) return false;
     const used = usedPodIds();
-    const roster = new Set(state.players.map((p) => p.id));
+    const roster = new Set(activePlayers().map((p) => p.id));
     if (used.size !== roster.size) return true;
     for (const id of roster) {
       if (!used.has(id)) return true;
@@ -601,23 +660,26 @@
   }
 
   function renderGenerateControls() {
-    const n = state.players.length;
+    const n = activePlayerCount();
+    const out = state.players.length - n;
     const genBtn = $('generateBtn');
     const helper = $('generateHelper');
     if (n < 3) {
       genBtn.disabled = true;
       genBtn.textContent = 'Generate groups';
-      helper.textContent = 'Need at least 3 players';
+      helper.textContent =
+        out > 0 ? `Need at least 3 active players (${out} sitting out)` : 'Need at least 3 players';
       helper.hidden = false;
     } else if (n === 5) {
       genBtn.disabled = false;
       genBtn.textContent = state.pods.length ? 'Regenerate / reshuffle' : 'Generate groups';
-      helper.textContent = '5 players needs a choice — pick an option below.';
+      helper.textContent = '5 active players need a choice — pick an option below.';
       helper.hidden = false;
     } else {
       genBtn.disabled = false;
       genBtn.textContent = state.pods.length ? 'Regenerate / reshuffle' : 'Generate groups';
-      helper.textContent = `${n} players → ${computePodSizes(n).join(' + ')}`;
+      helper.textContent =
+        `${n} active → ${computePodSizes(n).join(' + ')}` + (out > 0 ? ` · ${out} sitting out` : '');
       helper.hidden = false;
     }
     $('copyPodsBtn').disabled = state.pods.length === 0;
@@ -626,11 +688,11 @@
   function renderStaleBanner() {
     const stale = podsAreStale();
     $('staleBanner').hidden = !stale;
-    if (stale) $('staleRegenBtn').disabled = state.players.length < 3;
+    if (stale) $('staleRegenBtn').disabled = activePlayerCount() < 3;
   }
 
   function renderFivePanel() {
-    $('fivePanel').hidden = !(state.players.length === 5 && fiveChoicePending);
+    $('fivePanel').hidden = !(activePlayerCount() === 5 && fiveChoicePending);
   }
 
   function renderPods() {
@@ -640,29 +702,28 @@
       grid.append(
         el('p', 'empty-note', 'No groups yet. Add players on the Roster tab, then press "Generate groups".')
       );
-      return;
+    } else {
+      state.pods.forEach((pod, index) => {
+        const card = el('article', 'pod-card');
+        card.dataset.podIndex = String(index);
+        const head = el('div', 'pod-card__head');
+        head.append(el('h3', 'pod-card__title', `Pod ${index + 1}`));
+        const badge = el('span', 'pod-badge', String(pod.length));
+        badge.setAttribute('aria-label', `${pod.length} players`);
+        head.append(badge);
+        card.append(head);
+        card.append(buildWinnerPicker(index, pod));
+        grid.append(card);
+      });
     }
-    state.pods.forEach((pod, index) => {
-      const card = el('article', 'pod-card');
-      card.dataset.podIndex = String(index);
-      const head = el('div', 'pod-card__head');
-      head.append(el('h3', 'pod-card__title', `Pod ${index + 1}`));
-      const badge = el('span', 'pod-badge', String(pod.length));
-      badge.setAttribute('aria-label', `${pod.length} players`);
-      head.append(badge);
-      card.append(head);
-      card.append(buildWinnerPicker(index, pod));
-      grid.append(card);
-    });
-    if (state.sittingOut.length > 0) {
+    const sitterIds = currentSitterIds();
+    if (sitterIds.length > 0) {
       const card = el('article', 'pod-card pod-card--sitout');
       const head = el('div', 'pod-card__head');
       head.append(el('h3', 'pod-card__title', 'Sitting out'));
-      head.append(el('span', 'pod-badge', String(state.sittingOut.length)));
+      head.append(el('span', 'pod-badge', String(sitterIds.length)));
       const names = el('ul', 'pod-names');
-      for (const id of state.sittingOut) {
-        if (state.players.some((p) => p.id === id)) names.append(el('li', null, nameOf(id)));
-      }
+      for (const id of sitterIds) names.append(el('li', null, nameOf(id)));
       card.append(head, names);
       grid.append(card);
     }
@@ -676,7 +737,7 @@
     const pickedId = state.winnerPicks[podIndex];
     for (const id of pod) {
       const player = state.players.find((p) => p.id === id);
-      if (!player) continue; // left after the split — cannot win
+      if (!player || player.out) continue; // gone or sitting out — cannot win
       const li = el('li');
       const label = el('label', 'pod-player' + (pickedId === id ? ' pod-player--winner' : ''));
       const input = el('input');
@@ -711,7 +772,7 @@
     if (!id) return false;
     const pod = state.pods[podIndex];
     if (!pod || !pod.includes(id)) return false;
-    return state.players.some((p) => p.id === id);
+    return state.players.some((p) => p.id === id && !p.out);
   }
 
   function renderPodsView() {
@@ -757,10 +818,10 @@
       round: recorded,
       at: Date.now(),
       pods: state.pods.map((pod, i) => ({
-        players: pod.filter((id) => state.players.some((p) => p.id === id)).map(nameOf),
+        players: pod.filter((id) => state.players.some((p) => p.id === id && !p.out)).map(nameOf),
         winner: nameOf(state.winnerPicks[i]),
       })),
-      satOut: state.sittingOut.map(nameOf),
+      satOut: currentSitterIds().map(nameOf),
       durationMinutes: state.settings.durationMinutes,
     });
     state.roundNumber += 1;
