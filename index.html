@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0d1220" />
+  <meta name="description" content="Split your Magic: The Gathering Commander playgroup into random pods and run one shared round timer." />
+  <title>Commander Pods</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%8E%B2%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__inner">
+      <h1 class="app-title">Commander Pods</h1>
+      <div class="reset-area">
+        <button type="button" id="resetBtn" class="btn btn--danger-outline">Reset day</button>
+        <div class="reset-confirm" id="resetConfirm" hidden>
+          <span class="reset-confirm__label">Reset everything?</span>
+          <button type="button" id="resetYes" class="btn btn--danger">Yes, reset</button>
+          <button type="button" id="resetNo" class="btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="notice-wrap">
+    <div class="notice" id="storageNotice" hidden>
+      <span>Changes won't be saved this session (storage unavailable).</span>
+      <button type="button" class="notice__close" id="storageNoticeClose" aria-label="Dismiss notice">&times;</button>
+    </div>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="App sections">
+    <button class="tab" type="button" role="tab" id="tab-roster" aria-controls="panel-roster" aria-selected="true">Roster</button>
+    <button class="tab" type="button" role="tab" id="tab-pods" aria-controls="panel-pods" aria-selected="false" tabindex="-1">Pods</button>
+    <button class="tab" type="button" role="tab" id="tab-timer" aria-controls="panel-timer" aria-selected="false" tabindex="-1">Timer</button>
+  </nav>
+
+  <main class="page">
+
+    <section class="panel" id="panel-roster" role="tabpanel" aria-labelledby="tab-roster">
+      <div class="panel-head">
+        <h2>Players</h2>
+        <span class="player-count" id="playerCount" role="status">0 players</span>
+      </div>
+      <form class="add-row" id="addPlayerForm" novalidate>
+        <label class="visually-hidden" for="playerNameInput">Player name</label>
+        <input type="text" id="playerNameInput" maxlength="24" autocomplete="off" placeholder="e.g. Ana" aria-describedby="nameError" />
+        <button type="submit" class="btn btn--primary">Add player</button>
+      </form>
+      <p class="field-error" id="nameError" role="alert" hidden></p>
+      <ul class="player-list" id="playerList"></ul>
+      <p class="hint" id="rosterHint" hidden></p>
+    </section>
+
+    <section class="panel" id="panel-pods" role="tabpanel" aria-labelledby="tab-pods" hidden>
+      <div class="panel-head"><h2>Pods</h2></div>
+      <div class="generate-row">
+        <button type="button" id="generateBtn" class="btn btn--primary">Generate groups</button>
+        <button type="button" id="copyPodsBtn" class="btn" disabled>Copy pods</button>
+      </div>
+      <p class="hint" id="generateHelper" hidden></p>
+      <div class="banner banner--stale" id="staleBanner" hidden>
+        <span>Roster changed — groups are out of date.</span>
+        <button type="button" id="staleRegenBtn" class="btn">Regenerate.</button>
+      </div>
+      <div class="banner banner--choice" id="fivePanel" hidden>
+        <p>5 players can't be split into pods of 3 and 4. Choose how to run it:</p>
+        <div class="banner__actions">
+          <button type="button" id="fiveHouseBtn" class="btn">One pod of 5 (house rules)</button>
+          <button type="button" id="fiveSitOutBtn" class="btn">One pod of 4 + 1 player sits out</button>
+        </div>
+      </div>
+      <div class="pod-grid" id="podCards"></div>
+    </section>
+
+    <section class="panel" id="panel-timer" role="tabpanel" aria-labelledby="tab-timer" hidden>
+      <div class="panel-head"><h2>Round timer</h2></div>
+
+      <div class="preset-row" role="group" aria-label="Duration presets">
+        <button type="button" class="btn preset" data-minutes="45" aria-pressed="false">45 min</button>
+        <button type="button" class="btn preset" data-minutes="60" aria-pressed="false">60 min</button>
+        <button type="button" class="btn preset" data-minutes="75" aria-pressed="false">75 min</button>
+        <button type="button" class="btn preset" data-minutes="90" aria-pressed="false">90 min</button>
+      </div>
+
+      <form class="custom-row" id="customForm" novalidate>
+        <label for="customMinutes">Custom:</label>
+        <input type="number" id="customMinutes" min="1" max="600" step="1" inputmode="numeric" placeholder="1–600" aria-describedby="customError" />
+        <span>min</span>
+        <button type="submit" class="btn">Set</button>
+      </form>
+      <p class="field-error" id="customError" role="alert" hidden></p>
+
+      <div class="timer-display" id="timerDisplay" role="timer">75:00</div>
+      <p class="ends-at" id="endsAt">Not started</p>
+
+      <div class="timer-controls">
+        <button type="button" id="startBtn" class="btn btn--primary btn--big">Start</button>
+        <button type="button" id="pauseBtn" class="btn btn--big" hidden>Pause</button>
+        <button type="button" id="resumeBtn" class="btn btn--big" hidden>Resume</button>
+        <button type="button" id="resetTimerBtn" class="btn btn--big" disabled>Reset</button>
+      </div>
+
+      <div class="sound-row">
+        <button type="button" id="muteBtn" class="btn" aria-pressed="true">🔊 Sound on</button>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="app-footer">
+    <p>Single device, no accounts — data stays in this browser's storage.</p>
+  </footer>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+  <div class="overlay" id="alarmOverlay" hidden role="alertdialog" aria-modal="true" aria-labelledby="alarmTitle" aria-describedby="alarmDesc">
+    <div class="overlay__card">
+      <h2 id="alarmTitle">⏰ Round over — time to wrap up!</h2>
+      <p id="alarmDesc">Finish the current turn and get ready for the next round.</p>
+      <button type="button" id="stopAlarmBtn" class="btn btn--primary btn--big">Stop alarm</button>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
