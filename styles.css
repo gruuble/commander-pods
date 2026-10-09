@@ -236,6 +236,35 @@ input[aria-invalid="true"] { border-color: var(--danger-text); }
   cursor: pointer;
 }
 .player-remove:hover { color: var(--danger-text); background: rgba(220, 38, 38, 0.12); }
+.player-sitout {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.player-sitout:hover { background: var(--surface); color: var(--text); }
+.player-sitout--on { color: var(--amber); border-color: var(--amber-border); }
+.player-sitout--on:hover { background: rgba(251, 191, 36, 0.12); color: var(--amber); }
+.player-row--out .player-name { color: var(--muted); }
+.player-out-badge {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 3px 9px;
+  border: 1px solid var(--amber-border);
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.14);
+  color: var(--amber);
+  font-size: 1rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
 .rename-wrap { flex: 1; min-width: 0; padding-right: 6px; }
 .rename-input {
   width: 100%;
