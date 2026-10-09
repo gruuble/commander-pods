@@ -36,6 +36,7 @@
     <button class="tab" type="button" role="tab" id="tab-roster" aria-controls="panel-roster" aria-selected="true">Roster</button>
     <button class="tab" type="button" role="tab" id="tab-pods" aria-controls="panel-pods" aria-selected="false" tabindex="-1">Pods</button>
     <button class="tab" type="button" role="tab" id="tab-timer" aria-controls="panel-timer" aria-selected="false" tabindex="-1">Timer</button>
+    <button class="tab" type="button" role="tab" id="tab-results" aria-controls="panel-results" aria-selected="false" tabindex="-1">Results</button>
   </nav>
 
   <main class="page">
@@ -74,6 +75,11 @@
         </div>
       </div>
       <div class="pod-grid" id="podCards"></div>
+
+      <div class="submit-row">
+        <button type="button" id="submitRoundBtn" class="btn btn--primary">Submit round 1</button>
+        <p class="hint" id="submitHelper" hidden></p>
+      </div>
     </section>
 
     <section class="panel" id="panel-timer" role="tabpanel" aria-labelledby="tab-timer" hidden>
@@ -107,6 +113,17 @@
       <div class="sound-row">
         <button type="button" id="muteBtn" class="btn" aria-pressed="true">🔊 Sound on</button>
       </div>
+    </section>
+
+    <section class="panel" id="panel-results" role="tabpanel" aria-labelledby="tab-results" hidden>
+      <div class="panel-head">
+        <h2>Results</h2>
+        <span class="panel-count" id="resultsSummary" role="status">0 rounds</span>
+      </div>
+      <div class="generate-row">
+        <button type="button" id="downloadCsvBtn" class="btn btn--primary" disabled>Download CSV</button>
+      </div>
+      <div class="results-list" id="resultsList"></div>
     </section>
 
   </main>
